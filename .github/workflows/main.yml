@@ -1,4 +1,4 @@
-name: Build and Deploy
+name: Build and Deploy React Frontend
 
 on:
   push:
@@ -21,5 +21,37 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Build Angular App
+      - name: Build
         run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        with:
+          username: robinsingh811
+          password: Vivek@123123
+          registry: https://index.docker.io/v1/
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64, linux/arm64
+          push: true
+          tags: |
+            docker push robinsingh811/angular:latest
+            robinsingh811/angular:${{ github.sha }}
+
