@@ -33,9 +33,9 @@ API_KEY = '4de0c889-4150-4f47-94f5-42b3e26199de'
 SECRET_KEY = 'eoo5a9r0zt'
 RURL = 'https://127.0.0.1:5000/'
 
-TOTP_KEY = '4PXDG3PUEOFOFJEUVKBVBJ6L7P4JZWGP'
-MOBILE_NO = '7385614173'
-PIN   =    '258025'
+TOTP_KEY = ''
+MOBILE_NO = ''
+PIN   =    ''
 
 file_path = "hdfcbank_intraday_signals.xlsx"
 rurlEncode = quote(RURL,safe="")
@@ -437,7 +437,7 @@ import numpy as np
 import pandas as pd
 from collections import deque
 
-ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI0TENQS0siLCJqdGkiOiI2YWUxNzExOWU5NTgzNjJmNmYyYTExMzIiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc5MzE1OTQ0OSwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzkzMjI0ODAwfQ.ofrGOGXNhDlO3YQmR3s2V98BJIlna1Qcod5KXAiZ-28"
+ACCESS_TOKEN = ""
 
 prev_snapshot = None
 
@@ -1700,6 +1700,808 @@ observer.join()
 
 #     time.sleep(5)
 
+  //trade2.py
+  import numpy as np
+from openpyxl.utils import column_index_from_string
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+import pandas as pd
+import csv
+import os
+from time import monotonic
+import time
+import threading
+from datetime import datetime, time as dt_time
+import requests
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from collections import deque
+from time import now
+
+ACCESS_TOKEN = ""
+
+FIRST_STRIKE = 22000
+
+BASE_DIR = "/home/ec2-user"
+
+# CSV_FILE = os.path.join(BASE_DIR, "oi_data.csv")
+
+def check_signal(call_total_itm, put_total_otm,
+                 call_total_otm, put_total_itm):
+    
+
+    c_itm = np.asarray(call_total_itm)
+    p_otm = np.asarray(put_total_otm)
+    c_otm = np.asarray(call_total_otm[:3])
+    p_itm = np.asarray(put_total_itm[:3])
+    if (np.all((c_itm < 25000) & (p_otm > c_itm)) and \
+           np.all((c_otm < 25000) & (p_itm > c_otm))):
+        print("up")
+    elif (np.all((c_itm > 0) & (p_otm < 0)) and \
+           np.all((c_otm > 25000) & (p_itm < c_otm))):
+        print("down")
+
+def get_all_indexes(data, row_count, no_of_rows, ltp):
+# Last 5 rows, numeric data only
+    x = data[row_count - no_of_rows:row_count]['data']
+    # print("x", x)
+
+    # ATM
+    atm = int((ltp + 25) // 50 * 50)
+
+
+    # First strike = 1 step below ATM
+    # first = atm + 50
+    first = atm
+    # print("first", first)
+
+
+    # Starting strike index
+    k = (first - FIRST_STRIKE) // 50
+    # print("k", k)
+
+
+    # Call Delta indexes:
+    # k*4+2, k*4+6, k*4+10, ...
+    start = k * 4 + 2
+    startp = k * 2
+    startp1 = k * 2 + 1
+    return k, start, x, startp, startp1
+
+def get_call_put_delta_sum(k ,start, x):
+    call_indexes = start - np.arange(k) * 4
+    # call_indexess = np.append(call_indexes, call_indexes[-1] - 4)
+    call_indexess = start - np.arange(k + 1) * 4
+
+    # Five consecutive Call Delta columns
+    call_totals_otm = x[:, start:start + 20:4].sum(axis=0)
+    call_totals_itm = x[:, call_indexess[1:]].sum(axis=0)
+
+    # Five consecutive Put Delta columns
+    put_totals_itm = x[:, start + 1:start + 21:4].sum(axis=0)
+    put_indexes = call_indexes - 3
+    put_totals_otm = x[:, put_indexes].sum(axis=0)
+    print(call_totals_itm, put_totals_otm)
+    print(call_totals_otm, put_totals_itm)
+    return call_totals_itm, call_totals_otm, put_totals_itm, put_totals_otm
+
+def get_call_put_price_list(k ,startp, x):
+    print("hi")
+    call_indexes = startp - np.arange(k) * 2
+    call_indexess = startp - np.arange(k + 1) * 2
+    call_price_otm = x[:, startp:startp + 12:2].T
+    call_price_itm = x[:, call_indexess[1:]].T[:6]
+    put_price_itm = x[:, startp + 1:startp + 13:2].T
+    put_indexes = call_indexes - 1
+    put_price_otm = x[:, put_indexes].T
+    # print(call_price_otm, call_price_itm)
+    # print(put_price_otm, put_price_itm)
+    return call_price_otm, call_price_itm, put_price_otm, put_price_itm
+
+def get_call_put_delta_sums(data, row_count, no_of_rows, ltp):
+
+    # Last 5 rows, numeric data only
+    x = data[row_count - no_of_rows:row_count]['data']
+    # print("x", x)
+
+    # ATM
+    atm = int((ltp + 25) // 50 * 50)
+
+
+    # First strike = 1 step below ATM
+    # first = atm + 50
+    first = atm
+    # print("first", first)
+
+
+    # Starting strike index
+    k = (first - FIRST_STRIKE) // 50
+
+
+    # Call Delta indexes:
+    # k*4+2, k*4+6, k*4+10, ...
+    start = k * 4 + 2
+    call_indexes = start - np.arange(k) * 4
+    call_indexess = np.append(call_indexes, call_indexes[-1] - 4)
+    # call_indexess = start - np.arange(k + 1) * 4
+
+    # Five consecutive Call Delta columns
+    call_totals_otm = x[:, start:start + 20:4].sum(axis=0)
+    call_totals_itm = x[:, call_indexess[1:]].sum(axis=0)
+
+    # Five consecutive Put Delta columns
+    put_totals_itm = x[:, start + 1:start + 21:4].sum(axis=0)
+    put_indexes = call_indexes - 3
+
+    put_totals_otm = x[:, put_indexes].sum(axis=0)
+
+    # print(call_totals_otm, put_totals_itm)
+    # print(call_totals_itm, put_totals_otm)
+    # diff = np.asarray(call_totals_itm, dtype=np.int64) - np.asarray(put_totals_otm, dtype=np.int64)
+    # diff = np.asarray(call_totals_otm, dtype=np.int64) - np.asarray(put_totals_itm, dtype=np.int64)
+    # check_signal(call_totals_itm, put_totals_otm, call_totals_otm, put_totals_itm)
+        # print("signal")
+    # print(diff)
+    # timestamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")
+    # if np.all(diff < 0):
+    #     print(f"Buy NIFTY at {timestamp}")
+    # first - 50 * np.arange(5)
+
+    return call_totals_otm, put_totals_itm, call_totals_itm, put_totals_otm
+
+# nifty_ltp = 23240
+
+NUM_COLS = 43
+NUM_COLS1 = 91
+MAX_ROWS = 300
+MAX_ROWS1 = 300
+
+CSV_FILE = "Book1.csv"
+
+dtype = [
+    ('Timestamp', 'U20'),
+    ('data', 'f8', (42))
+]
+
+dtype1 = [
+    ('Timestamp', 'U20'),
+    ('data', 'f8', (90))
+]
+
+data = np.empty(MAX_ROWS, dtype=dtype)
+data1 = np.empty(MAX_ROWS1, dtype=dtype1)
+
+row_count = 0
+row_count1 = 0
+
+with open(CSV_FILE, "r", newline="") as f:
+
+    reader = csv.reader(f)
+
+    # Skip header
+    next(reader)
+
+    for row in reader:
+
+        data[row_count]['Timestamp'] = row[0]
+
+        try:
+            data[row_count]['data'] = np.asarray(
+                row[1:],
+                dtype=np.float64
+            )
+
+        except ValueError:
+            data[row_count]['data'] = np.asarray(
+                [0.0 if x == '' else x for x in row[1:]],
+                dtype=np.float64
+            )
+
+        row_count += 1
+
+    f.seek(0, 2)
+    
+    file_position = f.tell()
+
+print("Initial rows:", row_count)
+
+# with open(CSV_FILE, "r", newline="") as f:
+
+    # f.seek(0, 2)
+
+    # file_position = f.tell()
+
+def trend(x):
+    d = np.diff(x)
+    return np.all(d > 0), np.all(d < 0)
+
+
+sma10_list = deque(maxlen=10)
+sma20_list = deque(maxlen=10)
+spread_list1 = deque(maxlen=10)
+spread_list2 = deque(maxlen=10)
+ltp_list = deque(maxlen=10)
+sma10 = None
+sma20 = None
+
+def get_ltp(instrument_key):
+    url = "https://api.upstox.com/v3/market-quote/ltp"
+
+    params = {"instrument_key": instrument_key}
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {ACCESS_TOKEN}"
+    }
+
+    response = requests.get(url, headers=headers, params=params)
+    response.raise_for_status()
+
+    data = response.json()
+    ltp = data["data"]["NSE_INDEX:Nifty 50"]["last_price"]
+
+    return ltp
+
+def fetch_intraday_candles(instrument_key):
+    access_token = ACCESS_TOKEN
+    url = f'https://api.upstox.com/v3/historical-candle/intraday/{instrument_key}/minutes/5'
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {access_token}'
+    }
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    df = response.json()
+    return df
+
+def get_4hour_candles(instrument_key, start_date, end_date, access_token):
+    url = (
+        f"https://api.upstox.com/v3/historical-candle/"
+        f"{instrument_key.replace('|', '%7C')}/hours/4/"
+        f"{end_date}/{start_date}"
+    )
+
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {access_token}"
+    }
+
+    response = requests.get(url, headers=headers, timeout=10)
+
+    if response.status_code == 200:
+        return response.json()["data"]["candles"]
+
+    print(f"Error: {response.status_code} - {response.text}")
+    return None
+
+candles = get_4hour_candles(
+    instrument_key="NSE_EQ|INE848E01016",
+    start_date="2025-01-01",
+    end_date="2025-02-01",
+    access_token=ACCESS_TOKEN
+)
+
+def upstox_candles_to_df(resp):
+    candles = resp['data']['candles']
+
+    df = pd.DataFrame(
+        candles,
+        columns=['time', 'open', 'high', 'low', 'close', 'volume', 'oi']
+    )
+    df['time'] = pd.to_datetime(df['time']).dt.tz_localize(None)
+    return df
+
+def dataframe():
+    df = pd.read_csv("customers-100.csv")
+
+    data = {
+        'open': df["open"].tolist(),
+        'high': df["high"].tolist(),
+        'low': df["low"].tolist(),
+        'close': df["close"].tolist()
+    }
+
+    df1 = pd.DataFrame(data).tail(20)['close'].to_numpy()
+    return df1
+
+def save_intraday_to_csv(upstox_response, file_name):
+    new_df = upstox_candles_to_df(upstox_response)
+    try:
+        old_df = pd.read_csv(file_name)
+        old_df['time'] = pd.to_datetime(old_df['time']).dt.tz_localize(None)
+    except FileNotFoundError:
+        new_df.to_csv(file_name, index=False)
+        print("[Excel] First candle file created")
+        return
+
+    merged = pd.concat([old_df, new_df])
+    merged = merged.drop_duplicates(subset=['time'])
+    merged = merged.sort_values('time')
+    if len(merged) > len(old_df):
+        merged.to_csv(file_name, index=False)
+    else:
+        print("[Excel] No new candles to append")
+
+def price_towards_sma10(ltp_list, sma10_list):
+    distance = np.abs(
+        np.asarray(ltp_list[-3:]) -
+        np.asarray(sma10_list[-3:])
+    )
+
+    if np.all(np.diff(distance) < 0):
+        if ltp_list[-1] > sma10_list[-1]:
+            return "towards_from_above"
+        else:
+            return "towards_from_below"
+
+    return "moving_away_or_not_consistent"
+
+class CSVHandler(FileSystemEventHandler):
+
+    def __init__(self, row_count, file_position):
+        self.row_count = row_count
+        self.file_position = file_position
+        self.last_processed_candle = None
+        self.long_entry_price = None
+        self.long_entry_time = None
+        self.short_entry_price = None
+        self.short_entry_time = None
+        self.position = None
+        self.prev_sma10 = None
+        self.prev_sma20 = None
+        self.prev_ltp = None
+        self.last_4hour_run = None
+     
+    def bollinger_bands(self, data, window_size=20):
+        rolling_mean = data['close'].rolling(window=window_size).mean()
+        rolling_std = data['close'].rolling(window=window_size).std()
+    
+        data['Upperband'] = rolling_mean + (2 * rolling_std)
+        data['Lowerband'] = rolling_mean - (2 * rolling_std)
+    
+        last_row = data.iloc[-1]
+    
+        upperband = round(last_row['Upperband'], 2)
+        lowerband = round(last_row['Lowerband'], 2)
+    
+        return upperband, lowerband
+
+    def get_intraday_candles(self):
+        now = datetime.now(IST)
+        candle_time = (now.date(), now.hour, now.minute // 5)
+        if (dt_time(9, 15, 10) <= now.time() <= dt_time(15, 25, 10)    and now.minute % 5 == 0 and now.second >= 10    and candle_time != self.last_processed_candle):
+            candles = fetch_intraday_candles(instrument_key="NSE_INDEX|Nifty 50")
+            save_intraday_to_csv(upstox_response=candles, file_name="Book1.csv")
+            self.last_processed_candle = candle_time
+    
+    def get_4_hour_candles(self):
+        now = datetime.now(IST)
+        
+        if now.time() >= dt_time(9, 15) and now.time() < dt_time(9, 16):
+            run_key = (now.date(), "09:15")
+        
+        elif now.time() >= dt_time(13, 15) and now.time() < dt_time(13, 16):
+            run_key = (now.date(), "13:15")
+        
+        else:
+            run_key = None
+        
+        if run_key is not None and run_key != self.last_4hour_run = None:
+            data = get_4hour_candles(instrument_key="NSE_INDEX|Nifty 50", start_date="2025-01-01", end_date="2025-02-01", access_token=ACCESS_TOKEN)
+            self.last_4hour_run = None = run_key
+            self.bollinger_bands(data)
+
+    def run_every_second(self):
+        while True:
+            now = datetime.now(IST)
+            self.get_intraday_candles()
+            self.get_4_hour_candles()
+
+            if self.position is not None:
+
+                if dt_time(9, 15) <= now.time() <= dt_time(15, 30):
+                    ltp = get_ltp(instrument_key="NSE_INDEX|Nifty 50")
+                    self.check_trade_hold(sma10_list[-1], sma20_list[-1], ltp)
+                    self.check_long_exit(ltp, now)
+                    self.check_short_exit(ltp, now)
+                    self.check_trade_exit(ltp, sma10_list, sma20_list)
+
+            time.sleep(1)
+
+    def check_long_exit(self, ltp, now):
+        if self.long_entry_price is None:
+            return False
+
+        if (
+            ltp >= self.long_entry_price + 10
+            or monotonic() - self.long_entry_time >= 300
+        ):
+            with open("trade2.txt", "a") as file:
+                file.write(f"SELL {now}\n")
+
+            self.long_entry_price = None
+            self.long_entry_time = None
+            self.position = None
+            return True
+
+        return False
+
+    def check_short_exit(self, ltp, now):
+        if self.short_entry_price is None:
+            return False
+
+        if (
+            ltp <= self.short_entry_price - 10
+            or monotonic() - self.short_entry_time >= 300
+        ):
+            with open("trade2.txt", "a") as file:
+                file.write(f"Buy {now}\n")
+
+            self.short_entry_price = None
+            self.short_entry_time = None
+            self.position = None
+            return True
+
+        return False
+
+    def check_trend(self, arr):
+        diff = np.diff(arr, axis=1)
+
+        if np.all(diff > 0):
+            return True
+        elif np.all(diff < 0):
+            return True
+        
+        return False
+        
+    def on_modified(self, event):
+        
+        # if event.src_path.endswith(CSV_FILE):
+
+        #     self.process_file_change()
+
+        if os.path.abspath(event.src_path) == "/home/ec2-user/Book1.csv":
+            ltp = get_ltp(instrument_key="NSE_INDEX|Nifty 50")
+            self.process_file_change(ltp)
+
+    def generally_rising(self, values, min_up=6, min_move=5):
+        n = len(values)
+
+        if n < 2:
+            return False
+
+        up_count = sum(
+            values[i] > values[i - 1]
+            for i in range(1, n)
+        )
+
+        return (
+            values[-1] - values[0] >= min_move
+            and up_count >= min_up
+        )
+
+    def generally_falling(self, values, min_down=6, min_move=5):
+        n = len(values)
+
+        if n < 2:
+            return False
+
+        down_count = sum(
+            values[i] < values[i - 1]
+            for i in range(1, n)
+        )
+
+        return (
+            values[0] - values[-1] >= min_move
+            and down_count >= min_down
+        )
+
+    def check_bollinger_trade(self, ltp, upperband, lowerband):
+        if ltp >= upperband:
+            return -1  # SELL
+        elif ltp <= lowerband:
+            return 1   # BUY
+        return 0      # No trade
+
+    def check_trade_hold(self, sma10, sma20, ltp):
+
+        if self.position == "LONG":
+
+            if (
+                sma10 > sma20
+                and sma10 > self.prev_sma10
+                and sma20 >= self.prev_sma20
+                and ltp >= self.prev_ltp
+            ):
+                print("HOLD LONG")
+            else:
+                print("LONG HOLD CONDITION FAILED")
+
+        elif self.position == "SHORT":
+
+            if (
+                sma10 < sma20
+                and sma10 < self.prev_sma10
+                and sma20 <= self.prev_sma20
+                and ltp <= self.prev_ltp
+            ):
+                print("HOLD SHORT")
+            else:
+                print("SHORT HOLD CONDITION FAILED")
+
+        # Update previous candle values
+        if self.position is not None:
+            self.prev_sma10 = sma10
+            self.prev_sma20 = sma20
+            self.prev_ltp = ltp
+
+    def check_trade_exit(self, ltp, sma10_list, sma20_list):
+
+        sma10 = sma10_list[-1]
+        prev_sma10 = sma10_list[-2]
+
+        sma20 = sma20_list[-1]
+        prev_sma20 = sma20_list[-2]
+
+        timestamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")
+        # LONG trade exit
+        if self.long_entry_price is not None:
+
+            if (sma10 > sma20 and
+                sma10 > prev_sma10 and
+                sma20 >= prev_sma20 and
+                ltp >= sma10):
+
+                diff = ltp - sma10
+
+                if diff <= 5:
+                    with open("trade2.txt", "a") as file:
+                        file.write(f"Nifty buyyyy exit {timestamp}\n")
+
+                    self.long_entry_price = None
+                    self.long_entry_time = None
+                    self.position = None
+
+        # SHORT trade exit
+        if self.short_entry_price is not None:
+
+            if (sma10 < sma20 and
+                sma10 < prev_sma10 and
+                sma20 <= prev_sma20 and
+                ltp <= sma10):
+
+                diff = sma10 - ltp
+
+                if diff <= 5:
+                    with open("trade2.txt", "a") as file:
+                        file.write(f"Nifty sellll exit {timestamp}\n")
+
+                    self.short_entry_price = None
+                    self.short_entry_time = None
+                    self.position = None
+
+    def process_file_change(self, ltp):
+
+        with open(CSV_FILE, "r", newline="") as f:
+
+            f.seek(self.file_position)
+
+            reader = csv.reader(f)
+
+            for row in reader:
+
+                if not row:
+                    continue
+
+                data[self.row_count]['Timestamp'] = row[0]
+            
+                data[self.row_count]['data'] = np.array(
+                    [0.0 if x == '' else float(x) for x in row[1:]],
+                    dtype=np.float64
+                )
+
+                self.row_count += 1
+
+                print("New row:", self.row_count)
+                now = datetime.now(IST)
+
+                # if now.time() >= dt_time(9, 15) and now.time() < dt_time(9, 16):
+                #     run_key = (now.date(), "09:15")
+
+                # elif now.time() >= dt_time(13, 15) and now.time() < dt_time(13, 16):
+                #     run_key = (now.date(), "13:15")
+
+                # else:
+                #     run_key = None
+
+                # if run_key is not None and run_key != last_run:
+                #     get_4hour_candles(
+                #         instrument_key="NSE_INDEX|Nifty 50",
+                #         start_date="2025-01-01",
+                #         end_date="2025-02-01",
+                #         access_token=ACCESS_TOKEN
+                #     )
+                #     last_run = run_key
+                
+                # candle_time = (now.date(), now.hour, now.minute // 5)
+                # if (
+                #     now.time() >= dt_time(9, 15, 10)
+                #     and now.minute % 5 == 0
+                #     and now.second >= 10
+                #     and candle_time != last_processed_candle
+                # ):
+                    # candles = fetch_intraday_candles(
+                    #     instrument_key="NSE_INDEX|Nifty 50"
+                    # )
+
+                    # save_intraday_to_csv(
+                    #     upstox_response=candles,
+                    #     file_name="customers-100.csv"
+                    # )
+
+                time.sleep(1)
+                ltp = get_ltp(instrument_key="NSE_INDEX|Nifty 50")
+                closes = dataframe()
+                sma10 = round(float(closes[-10:].sum()) * 0.1, 2)
+                sma20 = round(float(closes[-20:].sum()) * 0.05, 2)
+                sma10_list.append(sma10)
+                sma20_list.append(sma20)
+                spread_list1.append(ltp - sma10)
+                spread_list2.append(ltp - sma20)
+                ltp_list.append(ltp)
+                    
+                # last_processed_candle = candle_time
+
+                price_towards_sma10(ltp_list, sma10_list)
+                timestamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%H:%M:%S")
+                if (self.generally_rising(sma10_list) and self.generally_rising(sma20_list)):
+                    if sma10_list[-1] > sma20_list[-1] and ltp >= sma10_list[-1] + 5:
+                        with open("trade2.txt", "a") as file:
+                            file.write(f"Nifty buyyyy {timestamp}\n")
+                        self.position = "LONG"
+                        self.long_entry_price = ltp
+                        self.long_entry_time = time.monotonic()
+
+                elif (self.generally_falling(sma10_list) and self.generally_falling(sma20_list)):
+                    if sma10_list[-1] < sma20_list[-1] and ltp <= sma10_list[-1] - 5:
+                        with open("trade2.txt", "a") as file:
+                            file.write(f"Nifty sellll {timestamp}\n")
+                        self.position = "SHORT"
+                        self.short_entry_price = ltp
+                        self.short_entry_time = time.monotonic()
+        
+                self.check_trade_hold(sma10_list[-1], sma20_list[-1], ltp)
+                self.check_long_exit(ltp, now)
+                self.check_short_exit(ltp, now)
+                self.check_trade_exit(ltp, sma10_list, sma20_list)
+
+                # old_low = intraday_low
+                # old_high = intraday_high
+
+                # if ltp < intraday_low:
+                #     intraday_low = ltp
+
+                # if ltp > intraday_high:
+                #     intraday_high = ltp
+
+                # if ltp == old_low or ltp == old_high:
+                #     print("hi", ltp)
+            self.file_position = f.tell()
+
+IST = ZoneInfo("Asia/Kolkata")
+handler = CSVHandler(row_count, file_position)
+
+threading.Thread(
+    target=handler.run_every_second,
+    daemon=True
+).start()
+
+observer = Observer()
+observer.schedule(
+    handler,
+    path=".",
+    recursive=False
+)
+
+observer.start()
+IST = ZoneInfo("Asia/Kolkata")
+
+observer.join()  
+
+# while True:
+
+#     with open(CSV_FILE, "r", newline="") as f:
+
+#         f.seek(file_position)
+
+#         reader = csv.reader(f)
+
+#         for row in reader:
+
+#             if not row:
+#                 continue
+
+#             data[row_count]['Timestamp'] = row[0]
+            
+#             data[row_count]['data'] = np.array(
+#                 [0.0 if x == '' else float(x) for x in row[1:]],
+#                 dtype=np.float64
+#             )
+
+#             row_count += 1
+
+#             print("New row:", row_count)
+
+#             latest = data[row_count - 1]['data']
+#             latest_5 = data[row_count - 5:row_count]['data']
+#             latest_3 = data[row_count - 3:row_count]['data']
+#             # second_last = latest_5[:, -2]
+#             # trend(second_last)
+#             # call_list = [latest_5[:, i].tolist() for i in range(0, latest_5.shape[1], 2)]
+#             # call_list = [latest_3[:, i].tolist() for i in range(0, latest_3.shape[1], 2)]
+#             # call_list_oi = [latest_5[:, i].tolist() for i in range(2, latest_5.shape[1], 4)]
+#             # print("clist", call_list)
+#             # put_list  = [latest_5[:, i].tolist() for i in range(1, latest_5.shape[1], 2)]
+#             # trend = (
+#             #     np.all(np.diff(call_list, axis=1) > 0, axis=1).astype(np.int8)
+#             #     -
+#             #     np.all(np.diff(call_list, axis=1) < 0, axis=1).astype(np.int8)
+#             # )
+#             # print("trend", trend)
+#             # ratio = call_list[0][-1] / call_list[0][-2]
+#             # print("r", ratio)
+
+#             # if ratio < 0.95:
+#             #     with open("trade2.txt", "a") as file:
+#             #         file.write(f"nifty sell \n")
+#             # if np.all(trend == -1) and ratio < 0.94:
+#             #     print("sell")
+
+#             # if ratio > 1.05:
+#             #     with open("trade2.txt", "a") as file:
+#             #         file.write(f"nifty buy \n")
+#             # if np.all(trend == 1) and ratio > 1.05:
+#             #     print("buy")
+#             # all_puts = [put_list]
+#             # all_calls = np.asarray(all_calls)[0]
+#             # print("latest", all_calls)
+#             # print("latest", all_puts)
+#             ltp = 23232
+#             # inc, dec = trend(latest_5)
+#             # if inc:
+#             #     print("increasing buy")
+#             # elif dec:
+#             #     print("decreasing sell")
+#             call_totals_otm, put_totals_itm, call_totals_itm, put_totals_otm = get_call_put_delta_sums(data, row_count, 6, ltp)
+#             # k, start, x, startp = get_all_indexes(data, row_count, 3, ltp)
+#             # call_price_otm, call_price_itm, put_price_otm, put_price_itm = get_call_put_price_list(k, startp, x)
+#             # trends = [trend(price_list) for price_list in call_price_itm]
+#             # print("t", trends)
+#             # if np.all(np.array(trends)[:, 0]):
+#             #     print("hiiiii")
+#             # if np.all(np.array(trends)[:, 1]):
+#             #     print("bye")
+#             # ratio1 = call_price_itm[:, -1] / call_price_itm[:, 0]
+#             # ratio2 = put_price_otm[:, -1] / put_price_otm[:, 0]
+#             # print("r", ratio1, ratio2)
+#             # get_call_put_delta_sum(k ,start, x)
+#             diff = put_totals_otm - call_totals_itm
+#             print(diff)
+#             if np.all(call_totals_itm < put_totals_otm):
+#             #     diff = put_totals_otm - call_totals_itm
+#                 print("hiii")
+#             # call_delta_sum = latest[2::4].sum()
+#             # put_delta_sum = latest[3::4].sum()
+#             # print(call_delta_sum, put_delta_sum)
+
+#         file_position = f.tell()
+
+#     time.sleep(5)
+
   // justscrap.py
   import time
 import numpy as np
@@ -1718,8 +2520,7 @@ from UpstoxAutoLoginShare import run_5min_scheduler
 INPUT_FILE = "intraday_data.xlsx" 
 OUTPUT_FILE = "output.xlsx"
 MERGED_FILE = "merged_output.xlsx"
-# access_token = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI0TENQS0siLCJqdGkiOiI2OThkZDhiZmZmOTNjNjNkM2QyZmUzODciLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc3MDkwMzc0MywiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzcwOTMzNjAwfQ.dLlTJ5P1KquOxArcsCyodyAhnZS6HDcP6ZhBBzGEwzU"
-access_token = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI0TENQS0siLCJqdGkiOiI2OThlOWU4NDFhMzhhYzdlZTIwYTNjZTMiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc3MDk1NDM3MiwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzcxMDIwMDAwfQ.Ekd7CYzix_d07d_jbTHqxtzh99QwhD4wAdnNwlENW4M"
+access_token = ""
 API_KEY = 'ghe3ta94ngx0fjye'
 
 def start_5min_scheduler_thread(instrument_key):
@@ -3163,8 +3964,8 @@ SECRET_KEY = 's90mkn0609yr4u4s7fbj0xnvlqj62xdj'
 RURL = 'https://127.0.0.1:5000/'
 
 TOTP_KEY = 'CO5IOOJ6AM62SGBLMGHNJZVZLCH7TFSC'
-MOBILE_NO = '7385614173'
-PASS = 'Vivek@121'
+MOBILE_NO = ''
+PASS = ''
 access_token="NUgFtcE5YybTQQP4KFxEpskQHDZvQUvu"
 EXCHANGE      = "NSE"
 TRADING_SYMBOL = "HDFCBANK" 
